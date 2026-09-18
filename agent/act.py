@@ -1,9 +1,11 @@
-"""Step 3: Act — apply the filename-nomenclature skill, then plan the archive move.
+"""Step 3: Act — apply the filename-nomenclature skill, then plan the rename.
 
-Naming logic mirrors skills/filename-nomenclature.md exactly. The actual move is
-NOT performed here: this function only decides source/destination. The move itself
-is executed by the orchestrating agent via the filesystem MCP server, so every
-file-system mutation stays behind one auditable tool call.
+Naming logic mirrors skills/filename-nomenclature.md exactly. The file stays in
+its current directory — this only renames it, it does not move it anywhere.
+The actual rename is NOT performed here: this function only decides the new
+name/path. The rename itself is executed by the orchestrating agent via the
+filesystem MCP server, so every file-system mutation stays behind one
+auditable tool call.
 """
 
 import os
@@ -46,18 +48,17 @@ def resolve_collision(filename: str, existing_filenames: list) -> str:
     return f"{stem}-{n}{ext}"
 
 
-def plan_action(perceived: dict, classification: dict, person_name: str, archive_root: str, existing_filenames: list) -> dict:
+def plan_action(perceived: dict, classification: dict, person_name: str, existing_filenames: list) -> dict:
     raw_name = build_filename(perceived, classification, person_name)
-    final_name = resolve_collision(raw_name, existing_filenames)
+    source_dir = os.path.dirname(perceived["path"])
 
-    if classification["ownership"] == "own":
-        dest_dir = os.path.join(archive_root, "Own")
-    else:
-        dest_dir = os.path.join(archive_root, _clean(classification["category"]))
+    # the file's own current name isn't a collision with itself
+    others = [f for f in existing_filenames if f != perceived["filename"]]
+    final_name = resolve_collision(raw_name, others)
 
     return {
         "source_path": perceived["path"],
-        "dest_dir": dest_dir,
+        "dest_dir": source_dir,
         "dest_filename": final_name,
-        "dest_path": os.path.join(dest_dir, final_name),
+        "dest_path": os.path.join(source_dir, final_name),
     }

@@ -15,7 +15,7 @@ existing_filenames: filenames already present in the destination folder, for col
 Step 1: Apply the matching naming pattern
 If ownership == "own":
 
-<PersonName>_<WhatItIs>_<YYYY-MM-DD>.<extension>
+<PersonName>_<TitleInTheFile>_<YYYY-MM-DD>.<extension>
 Example: Arunima_MidtermEssay_2026-03-14.docx
 
 If ownership == "other":
