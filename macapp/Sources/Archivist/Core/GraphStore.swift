@@ -231,22 +231,48 @@ final class GraphStore {
         allNodes().filter { $0.status == .pendingReview }
     }
 
-    /// MVP keyword search over filename/summary/category/tags/extracted text.
-    /// Embedding-based ranking (cosine similarity against a query embedding) is the
-    /// natural next step once an embedding provider is reliably configured (see plan.md
-    /// section 9) — this keyword fallback keeps search usable without one.
+    /// MVP keyword search over filename, content (summary + extracted text), tags,
+    /// and category — anything typed about what a file is *called*, what it's
+    /// *about*, or how it's *tagged/categorized* should surface it. Embedding-based
+    /// ranking (cosine similarity against a query embedding) is the natural next step
+    /// once an embedding provider is reliably configured (see plan.md section 9) —
+    /// this keyword fallback keeps search usable without one.
+    ///
+    /// Ranked, not just filtered: a node scores higher per query term the more
+    /// "important" the field it matched in is (filename/tags/category > body content),
+    /// and higher still if every term matched somewhere. A node needs only one term
+    /// to match to appear at all, so a multi-word query doesn't silently return nothing
+    /// just because one word wasn't in the file.
     func search(query: String, limit: Int = 20) -> [Node] {
         let needle = query.lowercased()
-        guard !needle.isEmpty else { return [] }
-        let terms = needle.split(separator: " ").map(String.init)
-        return allNodes().filter { node in
-            let haystack = ([node.filename, node.category, node.summary, node.extractedText] + node.tags)
-                .joined(separator: " ")
-                .lowercased()
-            return terms.contains { haystack.contains($0) }
+        let terms = needle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard !terms.isEmpty else { return [] }
+
+        let scored: [(node: Node, score: Int)] = allNodes().compactMap { node in
+            let filename = node.filename.lowercased()
+            let category = node.category.lowercased()
+            let tags = node.tags.map { $0.lowercased() }
+            let content = (node.summary + " " + node.extractedText).lowercased()
+
+            var score = 0
+            var matchedTerms = 0
+            for term in terms {
+                var termMatched = false
+                if filename.contains(term) { score += 5; termMatched = true }
+                if tags.contains(where: { $0.contains(term) }) { score += 4; termMatched = true }
+                if category.contains(term) { score += 3; termMatched = true }
+                if content.contains(term) { score += 1; termMatched = true }
+                if termMatched { matchedTerms += 1 }
+            }
+            guard matchedTerms > 0 else { return nil }
+            if matchedTerms == terms.count { score += 10 } // every word in the query matched somewhere
+            return (node, score)
         }
-        .prefix(limit)
-        .map { $0 }
+
+        return scored
+            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.node.createdAt > $1.node.createdAt }
+            .prefix(limit)
+            .map { $0.node }
     }
 
     // MARK: - Edges

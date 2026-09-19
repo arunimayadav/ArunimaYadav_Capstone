@@ -13,6 +13,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Search your files…", text: $query, onCommit: runSearch)
                 .textFieldStyle(.roundedBorder)
+                .onChange(of: query) { _ in runSearch() }
 
             List(results) { node in
                 VStack(alignment: .leading, spacing: 4) {
