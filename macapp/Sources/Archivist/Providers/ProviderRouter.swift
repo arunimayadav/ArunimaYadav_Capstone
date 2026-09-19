@@ -37,6 +37,10 @@ final class ProviderRouter {
             let result = try await provider.understand(excerpt: excerpt, filename: filename, existingTags: existingTags)
             return (result, provider.kind.rawValue)
         } catch {
+            // Logged rather than swallowed: a silent catch here is exactly what made
+            // an earlier real failure (a request that timed out client-side before a
+            // slow local model finished) look like nothing happened at all.
+            print("[Archivist][ProviderRouter] \(provider.kind.rawValue) understand() failed: \(error)")
             guard provider.kind != .ollama else {
                 return (Self.fallbackUnderstanding(error: error), "none")
             }
@@ -44,6 +48,7 @@ final class ProviderRouter {
                 let result = try await ollama.understand(excerpt: excerpt, filename: filename, existingTags: existingTags)
                 return (result, "ollama (fallback)")
             } catch {
+                print("[Archivist][ProviderRouter] ollama fallback understand() also failed: \(error)")
                 return (Self.fallbackUnderstanding(error: error), "none")
             }
         }
@@ -67,8 +72,10 @@ final class ProviderRouter {
         }
         for provider in candidates {
             guard provider.kind.supportsEmbeddings else { continue }
-            if let vector = try? await provider.embed(text: text) {
-                return vector
+            do {
+                return try await provider.embed(text: text)
+            } catch {
+                print("[Archivist][ProviderRouter] \(provider.kind.rawValue) embed() failed: \(error)")
             }
         }
         return nil
@@ -77,7 +84,8 @@ final class ProviderRouter {
     /// A file that couldn't be understood at all (both providers down) lands in the
     /// review queue rather than being silently guessed at — see plan.md section 8.
     private static func fallbackUnderstanding(error: Error) -> FileUnderstanding {
-        FileUnderstanding(category: "Unsorted", summary: "Could not be analyzed automatically.",
+        FileUnderstanding(ownership: "other", category: "Unsorted", docType: "Other", title: "Untitled",
+                           summary: "Could not be analyzed automatically.",
                            tags: [], confidence: 0, reasoning: "AI call failed: \(error)")
     }
 }

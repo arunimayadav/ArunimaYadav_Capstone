@@ -50,8 +50,14 @@ enum EdgeType: String, Codable {
 }
 
 /// The structured result of one AI understanding call, before it becomes a Node.
+/// `ownership`, `docType`, and `title` exist specifically because they're the
+/// `Input` fields skills/filename-nomenclature.md needs to build a filename — they
+/// aren't otherwise used for search/tagging.
 struct FileUnderstanding {
+    var ownership: String // "own" or "other" — skills/filename-nomenclature.md Input
     var category: String
+    var docType: String
+    var title: String
     var summary: String
     var tags: [String]
     var confidence: Double

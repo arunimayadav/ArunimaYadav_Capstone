@@ -71,14 +71,70 @@ final class Pipeline {
 
         RelationshipBuilder.relate(node: node, in: store)
 
-        if status == .indexed {
-            TagWriter.write(category: node.category, tags: node.tags, to: url)
-            print("[Archivist][Pipeline] \(name): wrote Finder tags \([node.category] + node.tags)")
-        } else {
-            print("[Archivist][Pipeline] \(name): left in pending_review — check the Review tab")
+        guard status == .indexed else {
+            print("[Archivist][Pipeline] \(name): left in pending_review — check the Review tab " +
+                  "(not renamed or tagged; only indexed files are, per the confidence gate)")
+            return node
         }
 
-        return node
+        // Backfill indexes pre-existing files without ever renaming/moving them —
+        // plan.md Flow B, "a bulk, hard-to-reverse action shouldn't happen without an
+        // explicit, separate ask." The live watcher path (isBackfill == false) is the
+        // only one that renames.
+        var finalNode = node
+        var finalURL = url
+        if !isBackfill {
+            if let renamed = renameUsingSkill(node: node, understanding: understanding, at: url) {
+                finalURL = renamed.url
+                finalNode = renamed.node
+            }
+        } else {
+            print("[Archivist][Pipeline] \(name): backfill — indexing only, not renaming")
+        }
+
+        if TagWriter.write(category: finalNode.category, tags: finalNode.tags, to: finalURL) {
+            print("[Archivist][Pipeline] \(finalURL.lastPathComponent): wrote Finder tags " +
+                  "\(Array(Set([finalNode.category] + finalNode.tags)))")
+        }
+
+        return finalNode
+    }
+
+    /// Applies skills/filename-nomenclature.md to a freshly-indexed file: assembles
+    /// the name (Step 1) via FilenameNomenclature using the ownership/category/
+    /// docType/title the understanding call produced (itself governed by that same
+    /// skill file — see PromptBuilder), resolves collisions against the destination
+    /// folder (Step 2), and actually performs the rename on disk + graph.
+    private func renameUsingSkill(node: Node, understanding: FileUnderstanding, at url: URL) -> (url: URL, node: Node)? {
+        let name = url.lastPathComponent
+        let directory = url.deletingLastPathComponent()
+        let siblings = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        var existingFilenames = Set(siblings)
+        existingFilenames.remove(name) // renaming to our own current name isn't a "collision"
+
+        let input = FilenameNomenclature.Input(
+            ownership: understanding.ownership, category: node.category, docType: understanding.docType,
+            title: understanding.title, personName: settings.personName, fileExtension: url.pathExtension
+        )
+        let newName = FilenameNomenclature.filename(for: input, existingFilenames: existingFilenames)
+
+        guard newName != name else {
+            print("[Archivist][Pipeline] \(name): naming skill produced the same name — no rename needed")
+            return nil
+        }
+
+        let newURL = directory.appendingPathComponent(newName)
+        do {
+            try FileManager.default.moveItem(at: url, to: newURL)
+        } catch {
+            print("[Archivist][Pipeline] \(name): rename to \(newName) FAILED: \(error)")
+            return nil
+        }
+
+        store.recordMove(nodeId: node.id, srcPath: url.path, dstPath: newURL.path, triggeredBy: "auto-rename")
+        guard let updated = store.node(id: node.id) else { return nil }
+        print("[Archivist][Pipeline] \(name): renamed -> \(newName)")
+        return (newURL, updated)
     }
 
     /// Backfill (plan.md Flow B): index everything in `directory` not already

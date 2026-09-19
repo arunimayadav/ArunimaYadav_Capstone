@@ -43,18 +43,43 @@ protocol AIProvider {
 }
 
 /// Shared prompt-building so every provider asks the same question the same way.
+///
+/// The two skill files below are embedded verbatim (read fresh off disk by
+/// SkillLoader, not paraphrased into this Swift string) so this prompt is always
+/// governed by whatever skills/tagging.md and skills/filename-nomenclature.md
+/// currently say. tagging.md directly governs the "tags" field. Naming itself
+/// (pattern assembly + collision handling) is deterministic and implemented in
+/// FilenameNomenclature.swift, not by the model — but that code needs
+/// ownership/category/docType/title as inputs (see filename-nomenclature.md's own
+/// "Input" section), so this call is what supplies those judgment calls.
 enum PromptBuilder {
     static func understandingPrompt(excerpt: String, filename: String, existingTags: [String]) -> String {
         """
         You are a file-organization assistant. Given a file's name and a text excerpt,
         return STRICT JSON only, no prose, matching this shape:
-        {"category": string, "summary": string, "tags": [string], "confidence": number between 0 and 1, "reasoning": string}
+        {"ownership": "own" or "other", "category": string, "docType": string, "title": string, "summary": string, "tags": [string], "confidence": number between 0 and 1, "reasoning": string}
 
-        Rules:
-        - "category" is a short bucket like "Finance", "Receipts", "Contracts", "Reading", "Personal", "Work".
-        - "summary" is one or two plain-language sentences about what this file actually is.
-        - "tags" should reuse from this existing vocabulary when it fits: \(existingTags.joined(separator: ", "))
-          Only invent a new tag if nothing existing fits. Prefer 1-4 tags.
+        === Tagging skill (governs the "tags" field — follow it exactly) ===
+        \(SkillLoader.tagging)
+        === end tagging skill ===
+
+        Existing tag vocabulary, per Step 1 of the tagging skill above — try these first: \(existingTags.joined(separator: ", "))
+
+        === Filename skill (governs "ownership", "category", "docType", "title" — \
+        these become the Input to a separate naming step, follow the skill's own \
+        definitions of each field exactly) ===
+        \(SkillLoader.filenameNomenclature)
+        === end filename skill ===
+
+        Additional rules for fields the skills above don't fully pin down:
+        - "ownership": "own" if this is the archive owner's own authored work
+          (an essay, an assignment, personal writing); "other" if it's something
+          they received or downloaded from someone else (a lecture deck, a reading,
+          an invoice, a statement).
+        - "title": a short, clean version of the file's actual subject (2-5 words,
+          no punctuation) — this is title_source distilled, per the filename skill's Input.
+        - "summary" is one or two plain-language sentences about what this file actually is,
+          independent of category/tags.
         - "confidence" reflects how sure you are about category+tags given the excerpt length/quality.
 
         Filename: \(filename)
@@ -88,7 +113,10 @@ enum PromptBuilder {
 }
 
 struct UnderstandingJSON: Decodable {
+    var ownership: String
     var category: String
+    var docType: String
+    var title: String
     var summary: String
     var tags: [String]
     var confidence: Double
@@ -104,7 +132,8 @@ extension AIProvider {
     func decodeUnderstanding(_ raw: String) throws -> FileUnderstanding {
         guard let data = PromptBuilder.extractJSON(from: raw) else { throw ProviderError.badResponse }
         let parsed = try JSONDecoder().decode(UnderstandingJSON.self, from: data)
-        return FileUnderstanding(category: parsed.category, summary: parsed.summary, tags: parsed.tags,
+        return FileUnderstanding(ownership: parsed.ownership, category: parsed.category, docType: parsed.docType,
+                                  title: parsed.title, summary: parsed.summary, tags: parsed.tags,
                                   confidence: parsed.confidence, reasoning: parsed.reasoning)
     }
 

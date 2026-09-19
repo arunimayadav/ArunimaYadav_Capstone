@@ -53,6 +53,15 @@ struct SettingsView: View {
                             .frame(width: 40)
                     }
                 }
+
+                Section("Naming") {
+                    TextField("Your name", text: $settings.personName)
+                    Text("Used for files classified as your own work — " +
+                         "\(settings.personName.isEmpty ? "Person" : settings.personName)_Title_YYYY-MM-DD.ext. " +
+                         "Required by skills/filename-nomenclature.md, which explicitly never infers this from the file.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding()
         }

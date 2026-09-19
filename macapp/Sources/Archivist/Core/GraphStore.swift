@@ -345,12 +345,16 @@ final class GraphStore {
             sqlite3_bind_text(stmt, 5, triggeredBy, -1, SQLiteTransient)
             sqlite3_step(stmt)
 
+            // filename tracks dstPath's basename too, not just path — otherwise a
+            // rename (or a folder move that hit a collision suffix) leaves the node's
+            // `filename` field stale relative to what's actually on disk.
             var update: OpaquePointer?
             defer { sqlite3_finalize(update) }
-            sqlite3_prepare_v2(db, "UPDATE nodes SET path = ?, updated_at = ? WHERE id = ?;", -1, &update, nil)
+            sqlite3_prepare_v2(db, "UPDATE nodes SET path = ?, filename = ?, updated_at = ? WHERE id = ?;", -1, &update, nil)
             sqlite3_bind_text(update, 1, dstPath, -1, SQLiteTransient)
-            sqlite3_bind_double(update, 2, Date().timeIntervalSince1970)
-            sqlite3_bind_int64(update, 3, nodeId)
+            sqlite3_bind_text(update, 2, URL(fileURLWithPath: dstPath).lastPathComponent, -1, SQLiteTransient)
+            sqlite3_bind_double(update, 3, Date().timeIntervalSince1970)
+            sqlite3_bind_int64(update, 4, nodeId)
             sqlite3_step(update)
 
             return sqlite3_last_insert_rowid(db)

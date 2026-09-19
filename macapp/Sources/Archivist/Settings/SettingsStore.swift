@@ -11,6 +11,7 @@ final class SettingsStore: ObservableObject {
         static let preferredProvider = "archivist.preferredProvider"
         static let confidenceThreshold = "archivist.confidenceThreshold"
         static let watchDesktop = "archivist.watchDesktop"
+        static let personName = "archivist.personName"
     }
 
     @Published var preferredProvider: ProviderKind? {
@@ -25,6 +26,12 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(watchDesktopToo, forKey: Keys.watchDesktop) }
     }
 
+    /// skills/filename-nomenclature.md: "<PersonName> always comes from config,
+    /// never inferred from the file itself." This is that config.
+    @Published var personName: String {
+        didSet { defaults.set(personName, forKey: Keys.personName) }
+    }
+
     init() {
         if let raw = defaults.string(forKey: Keys.preferredProvider) {
             preferredProvider = ProviderKind(rawValue: raw)
@@ -34,6 +41,7 @@ final class SettingsStore: ObservableObject {
         let stored = defaults.double(forKey: Keys.confidenceThreshold)
         confidenceThreshold = stored > 0 ? stored : 0.6
         watchDesktopToo = defaults.bool(forKey: Keys.watchDesktop)
+        personName = defaults.string(forKey: Keys.personName) ?? ""
     }
 
     func apiKey(for provider: ProviderKind) -> String? {
