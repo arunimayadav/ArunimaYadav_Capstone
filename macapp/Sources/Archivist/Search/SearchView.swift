@@ -60,6 +60,8 @@ struct SearchView: View {
     }
 
     private func runSearch() {
-        results = store.search(query: query)
+        // Only the single closest match, not a ranked list — "Show related" still
+        // surfaces the graph's connected files for that one match.
+        results = store.search(query: query, limit: 1)
     }
 }

@@ -58,10 +58,7 @@ It still has to be an always-on watcher, not an on-demand command, for the same 
 10. **Later, a command.** The user types "put all my bank stuff in one folder." The app resolves matching nodes from the graph, shows a confirmation with the file list and destination folder name, and on approval creates the folder, moves the files, updates each node's path, and appends to the move log.
 11. **Undo.** Any move (auto-tag doesn't count, only actual file moves) can be reversed from the move log.
 
-**Flow B — one-time backfill of existing Downloads:**
-1. User triggers "Index existing Downloads" from the menu.
-2. Each not-yet-indexed file goes through steps 2–7 above.
-3. Files are **never moved or renamed** by backfill — only indexed and tagged — exactly as in the original plan's backfill decision, and for the same reason (a bulk, hard-to-reverse action shouldn't happen without an explicit, separate ask).
+**No backfill.** An explicit product decision, not an oversight: only files downloaded *after* the watcher starts get indexed, renamed, and tagged. Files already sitting in Downloads before the app was ever run are deliberately left alone and stay unsearchable unless re-downloaded. A "Flow B" bulk backfill was prototyped (index-only, never rename, matching the original plan's caution around bulk hard-to-reverse actions) but was explicitly rejected — indexing a large pre-existing Downloads folder against local Ollama would take hours, and more importantly the owner wants search scoped to what the watcher has actually seen, not their entire download history. If this changes later, re-introduce it as a separate, explicitly-triggered action rather than folding it into the always-on pipeline.
 
 ## 6. System Architecture
 
@@ -121,7 +118,7 @@ confidence < threshold?  → in-app review list (untouched on disk)
 
 - **Menu Bar App** — the shell: status item, dropdown menu, a Search panel, a Settings window, a Review list, and the natural-language command box. Built in SwiftUI hosted from an `NSStatusItem`/`NSPopover`, no Dock icon (`.accessory` activation policy).
 - **FileWatcher** — FSEvents-based (`FSEventStreamCreate` or `DispatchSource` polling as a simpler first cut), debounced, ignores its own move destinations to avoid loops.
-- **Dedup gate** — SHA-256 content hash checked before any AI call, reused by backfill.
+- **Dedup gate** — SHA-256 content hash checked before any AI call.
 - **Extractor** — per-filetype text pull: PDFKit for `.pdf`; unzip + strip XML for `.docx`/`.pptx` (Office files are zips of XML — no external library needed); plain read for text formats. OCR/vision fallback for scanned PDFs is a flagged stretch goal, not MVP.
 - **AIProvider** — a single Swift protocol (`classify`, `summarize`, `tag`, `embed`, `interpretCommand`) with one concrete implementation per backend (Ollama over local HTTP; OpenAI, Anthropic, Groq, Gemini over their REST APIs). A `ProviderRouter` picks cloud-if-configured-else-Ollama and handles fallback on error. This is the direct successor to the original plan's single hardcoded "Ollama-only" Classifier/Summarizer/Tagger — same responsibilities, now backend-agnostic.
 - **Relationship Builder** — unchanged in spirit from the original plan: turns shared tags/category/embedding similarity into graph edges.
@@ -198,7 +195,7 @@ This keeps the dependency footprint minimal (system frameworks + SQLite, no thir
 | M5 — Relationship Builder + Search UI | Edges created on new nodes; Search panel returns best match + connected files |
 | M6 — Finder tags + Review list | Category/tags mirrored as native Finder tags; low-confidence items surfaced in an in-app review list |
 | M7 — Natural-language commands | CommandInterpreter: free-text → graph query → proposed folder/move action → confirm → execute → move log |
-| M8 — Remaining cloud providers + backfill + eval | OpenAI/Anthropic/Groq/Gemini providers; "index existing Downloads" backfill; run the evaluation plan below |
+| M8 — Remaining cloud providers + eval | OpenAI/Anthropic/Groq/Gemini providers; run the evaluation plan below (no backfill — explicitly descoped, see section 5) |
 
 ## 11. Evaluation
 
@@ -207,7 +204,6 @@ This keeps the dependency footprint minimal (system frameworks + SQLite, no thir
 - **Retrieval quality.** Natural-language search queries in the style you'd actually use ("that bank statement from a few weeks back") — is the right file the top match, and are the connected files it returns actually related?
 - **Command correctness.** For a natural-language reorganization command, confirm the proposed file list matches user intent *before* confirming, and that the executed move only touches what was shown and confirmed.
 - **Provider fallback behavior.** Turn off Ollama / use an invalid cloud key and confirm the app degrades to review-queue behavior rather than crashing or silently mis-filing.
-- **Backfill correctness.** Confirm indexing existing Downloads never moves or renames files, and that all of them become searchable afterward.
 
 ## 12. Risks / Open Questions
 

@@ -41,9 +41,24 @@ final class ProviderRouter {
             // an earlier real failure (a request that timed out client-side before a
             // slow local model finished) look like nothing happened at all.
             print("[Archivist][ProviderRouter] \(provider.kind.rawValue) understand() failed: \(error)")
-            guard provider.kind != .ollama else {
-                return (Self.fallbackUnderstanding(error: error), "none")
+
+            // Local Ollama's response time on modest hardware is highly variable
+            // (measured anywhere from ~30s to 150s+ for similar prompts in testing) —
+            // a single slow/failed attempt is not strong evidence the file can't be
+            // classified, just that this one attempt was unlucky. Retrying once
+            // before giving up avoids sending every transient slowdown straight to
+            // the review queue with no second chance.
+            if provider.kind == .ollama {
+                print("[Archivist][ProviderRouter] retrying ollama understand() once before giving up")
+                do {
+                    let result = try await ollama.understand(excerpt: excerpt, filename: filename, existingTags: existingTags)
+                    return (result, provider.kind.rawValue)
+                } catch {
+                    print("[Archivist][ProviderRouter] ollama retry also failed: \(error)")
+                    return (Self.fallbackUnderstanding(error: error), "none")
+                }
             }
+
             do {
                 let result = try await ollama.understand(excerpt: excerpt, filename: filename, existingTags: existingTags)
                 return (result, "ollama (fallback)")

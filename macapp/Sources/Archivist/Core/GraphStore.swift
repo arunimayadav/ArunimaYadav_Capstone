@@ -157,10 +157,16 @@ final class GraphStore {
         }
     }
 
+    /// Matches case- and whitespace-insensitively (`LOWER(REPLACE(name, ' ', ''))`)
+    /// so "Design Thinking", "design thinking", and "DesignThinking" all resolve to
+    /// the same tag row instead of silently sprawling into near-duplicates just
+    /// because the model formatted a repeat tag slightly differently across calls —
+    /// skills/tagging.md requires reuse; this makes that requirement hold even when
+    /// the model's own formatting is inconsistent.
     private func upsertTagLocked(_ name: String) -> Int64 {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
-        sqlite3_prepare_v2(db, "SELECT id FROM tags WHERE name = ?;", -1, &stmt, nil)
+        sqlite3_prepare_v2(db, "SELECT id FROM tags WHERE LOWER(REPLACE(name, ' ', '')) = LOWER(REPLACE(?, ' ', ''));", -1, &stmt, nil)
         sqlite3_bind_text(stmt, 1, name, -1, SQLiteTransient)
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_int64(stmt, 0)
@@ -378,6 +384,20 @@ final class GraphStore {
             sqlite3_step(update)
 
             return sqlite3_last_insert_rowid(db)
+        }
+    }
+
+    /// Removes a node entirely (node_tags, edges, moves referencing it, and the node
+    /// itself) — used when the underlying file vanishes (deleted/moved away by
+    /// something other than this app) before it could be renamed, so a permanently
+    /// stale, unrenamed record doesn't sit in the graph forever. Tags themselves are
+    /// left in place since other nodes may still reference them.
+    func deleteNode(id: Int64) {
+        queue.sync {
+            exec("DELETE FROM node_tags WHERE node_id = \(id);")
+            exec("DELETE FROM edges WHERE source_node_id = \(id) OR target_node_id = \(id);")
+            exec("DELETE FROM moves WHERE node_id = \(id);")
+            exec("DELETE FROM nodes WHERE id = \(id);")
         }
     }
 }
