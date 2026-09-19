@@ -8,6 +8,19 @@ final class Pipeline {
     let router: ProviderRouter
     let settings: SettingsStore
 
+    // Guards against the same path being processed twice concurrently. The AI call
+    // alone can take 1-3+ minutes with local Ollama (see OllamaProvider) — that's a
+    // wide window for a file to get re-saved (an export tool re-writing a WIP file,
+    // a browser finishing a partial download in stages, etc.) and trigger a second,
+    // overlapping run before the first has inserted its node. Without this, both
+    // runs pass the dedup check (nodeExists is false for both, since neither has
+    // inserted yet), both do a full duplicate AI call, and the loser's INSERT hits
+    // the nodes.content_hash UNIQUE constraint — GraphStore now recovers gracefully
+    // from that, but preventing the wasted duplicate call in the first place is
+    // better than merely surviving it.
+    private var inFlightPaths = Set<String>()
+    private let inFlightLock = NSLock()
+
     init(store: GraphStore, router: ProviderRouter, settings: SettingsStore) {
         self.store = store
         self.router = router
@@ -20,6 +33,13 @@ final class Pipeline {
     @discardableResult
     func process(fileAt url: URL, isBackfill: Bool = false) async -> Node? {
         let name = url.lastPathComponent
+
+        guard beginProcessing(url.path) else {
+            print("[Archivist][Pipeline] \(name): already being processed (in flight) — skipping this trigger")
+            return nil
+        }
+        defer { endProcessing(url.path) }
+
         print("[Archivist][Pipeline] processing \(name)")
 
         guard let hash = ContentHasher.hash(of: url) else {
@@ -135,6 +155,21 @@ final class Pipeline {
         guard let updated = store.node(id: node.id) else { return nil }
         print("[Archivist][Pipeline] \(name): renamed -> \(newName)")
         return (newURL, updated)
+    }
+
+    /// Returns false (caller should bail) if `path` is already being processed.
+    private func beginProcessing(_ path: String) -> Bool {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        guard !inFlightPaths.contains(path) else { return false }
+        inFlightPaths.insert(path)
+        return true
+    }
+
+    private func endProcessing(_ path: String) {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        inFlightPaths.remove(path)
     }
 
     /// Backfill (plan.md Flow B): index everything in `directory` not already

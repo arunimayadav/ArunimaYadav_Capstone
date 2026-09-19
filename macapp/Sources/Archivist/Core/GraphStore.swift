@@ -87,13 +87,18 @@ final class GraphStore {
     // MARK: - Dedup
 
     func nodeExists(contentHash: String) -> Bool {
-        queue.sync {
-            var stmt: OpaquePointer?
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_prepare_v2(db, "SELECT id FROM nodes WHERE content_hash = ?;", -1, &stmt, nil)
-            sqlite3_bind_text(stmt, 1, contentHash, -1, SQLiteTransient)
-            return sqlite3_step(stmt) == SQLITE_ROW
-        }
+        queue.sync { existingNodeIdLocked(contentHash: contentHash) != nil }
+    }
+
+    /// Must be called from within `queue.sync` (or from insertNode, which already
+    /// holds the queue) — not public, unlike nodeExists.
+    private func existingNodeIdLocked(contentHash: String) -> Int64? {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_prepare_v2(db, "SELECT id FROM nodes WHERE content_hash = ?;", -1, &stmt, nil)
+        sqlite3_bind_text(stmt, 1, contentHash, -1, SQLiteTransient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(stmt, 0)
     }
 
     // MARK: - Insert
@@ -126,7 +131,22 @@ final class GraphStore {
             sqlite3_bind_text(stmt, 10, contentHash, -1, SQLiteTransient)
             sqlite3_bind_double(stmt, 11, now)
             sqlite3_bind_double(stmt, 12, now)
-            sqlite3_step(stmt)
+
+            let stepResult = sqlite3_step(stmt)
+            guard stepResult == SQLITE_DONE else {
+                // Most likely cause: a UNIQUE(content_hash) collision from two
+                // overlapping pipeline runs racing on the same file (e.g. a file
+                // re-saved while the first run's AI call — which can take minutes —
+                // was still in flight, so both passed the dedup check before either
+                // had inserted). Look up whichever row actually won the race instead
+                // of blindly trusting last_insert_rowid, which would silently point
+                // at some unrelated previous insert (or a deleted row) and make the
+                // caller's immediate re-read fail with no explanation.
+                let message = String(cString: sqlite3_errmsg(db))
+                print("[Archivist][GraphStore] insertNode: INSERT failed (\(message)) for \(filename) — " +
+                      "looking up the existing row for this content_hash instead")
+                return existingNodeIdLocked(contentHash: contentHash) ?? -1
+            }
             let nodeId = sqlite3_last_insert_rowid(db)
 
             for tagName in understanding.tags {
