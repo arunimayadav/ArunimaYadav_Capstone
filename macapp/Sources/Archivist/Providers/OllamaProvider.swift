@@ -27,12 +27,15 @@ final class OllamaProvider: AIProvider {
         return try decodeCommand(raw)
     }
 
-    /// Local inference is legitimately slower than a cloud API, especially once the
-    /// prompt gets large (e.g. embedding full skill files — see PromptBuilder). The
-    /// default URLSession request timeout is 60s, which a big prompt on an 8B model
-    /// can exceed even though Ollama would have answered fine given more time — this
-    /// silently looked like "the AI call failed" rather than "it was just slow."
-    private static let requestTimeout: TimeInterval = 180
+    /// Local inference on modest hardware is not just slow but highly variable —
+    /// measured 70s and 150s for two similarly-sized prompts on this machine, back
+    /// to back. 180s still isn't a safe margin (confirmed: a real request that
+    /// would have succeeded at 149.6s got cut off in practice), so this is set with
+    /// generous headroom rather than tuned to a specific observed time. This is a
+    /// deliberate tradeoff of patience for reliability, not a workaround for a fixable
+    /// bug — see PromptBuilder for why the prompt is this size (both skill files
+    /// embedded verbatim) and Settings for a faster alternative (a cloud provider key).
+    private static let requestTimeout: TimeInterval = 300
 
     func embed(text: String) async throws -> [Float] {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/embeddings"))
