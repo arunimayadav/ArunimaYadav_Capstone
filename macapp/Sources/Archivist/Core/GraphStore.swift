@@ -386,4 +386,18 @@ final class GraphStore {
             return sqlite3_last_insert_rowid(db)
         }
     }
+
+    /// Removes a node entirely (node_tags, edges, moves referencing it, and the node
+    /// itself) — used when the underlying file vanishes (deleted/moved away by
+    /// something other than this app) before it could be renamed, so a permanently
+    /// stale, unrenamed record doesn't sit in the graph forever. Tags themselves are
+    /// left in place since other nodes may still reference them.
+    func deleteNode(id: Int64) {
+        queue.sync {
+            exec("DELETE FROM node_tags WHERE node_id = \(id);")
+            exec("DELETE FROM edges WHERE source_node_id = \(id) OR target_node_id = \(id);")
+            exec("DELETE FROM moves WHERE node_id = \(id);")
+            exec("DELETE FROM nodes WHERE id = \(id);")
+        }
+    }
 }

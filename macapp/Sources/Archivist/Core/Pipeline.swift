@@ -110,11 +110,29 @@ final class Pipeline {
             return node
         }
 
+        // A file can be deleted or moved away out-of-band (by the user, by another
+        // app, or as a duplicate cleanup) in the minutes between insertion and this
+        // point — the AI call alone can take that long. Catching it here, before
+        // even attempting the rename, avoids leaving a permanently un-renamed,
+        // confusing "stuck with its original ugly name" record sitting in the graph
+        // forever with no path forward to fix itself.
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("[Archivist][Pipeline] \(name): source file no longer exists — it was likely deleted " +
+                  "or moved away while this was being processed. Removing this now-stale entry rather " +
+                  "than leaving it stuck with its pre-rename name.")
+            store.deleteNode(id: node.id)
+            return nil
+        }
+
         var finalNode = node
         var finalURL = url
         if let renamed = renameUsingSkill(node: node, understanding: understanding, at: url) {
             finalURL = renamed.url
             finalNode = renamed.node
+        } else if store.node(id: node.id) == nil {
+            // renameUsingSkill deleted the node itself (source vanished mid-move).
+            print("[Archivist][Pipeline] \(name): node was removed during the rename attempt — nothing to return")
+            return nil
         }
 
         if TagWriter.write(category: finalNode.category, tags: finalNode.tags, to: finalURL) {
@@ -152,7 +170,15 @@ final class Pipeline {
         do {
             try FileManager.default.moveItem(at: url, to: newURL)
         } catch {
-            print("[Archivist][Pipeline] \(name): rename to \(newName) FAILED: \(error)")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                // Vanished in the narrow window between Pipeline's own existence
+                // check and this move actually running — same cleanup as that check.
+                print("[Archivist][Pipeline] \(name): rename failed because the source vanished " +
+                      "mid-move — removing this now-stale entry: \(error)")
+                store.deleteNode(id: node.id)
+            } else {
+                print("[Archivist][Pipeline] \(name): rename to \(newName) FAILED: \(error)")
+            }
             return nil
         }
 
