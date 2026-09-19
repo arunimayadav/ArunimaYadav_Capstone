@@ -22,9 +22,14 @@ final class FileWatcher {
         let callback: FSEventStreamCallback = { _, clientInfo, numEvents, eventPaths, _, _ in
             guard let clientInfo else { return }
             let watcher = Unmanaged<FileWatcher>.fromOpaque(clientInfo).takeUnretainedValue()
-            let pathsPtr = eventPaths.assumingMemoryBound(to: UnsafeMutableRawPointer.self)
+            // kFSEventStreamCreateFlagUseCFTypes means `eventPaths` IS the CFArrayRef
+            // itself (an array of CFStrings), not a pointer to a C array of char*/
+            // pointers — indexing into it as if it were the latter reads into the
+            // CFArray object's own memory and crashes almost immediately.
+            let cfPathsArray = unsafeBitCast(eventPaths, to: CFArray.self)
             for i in 0..<numEvents {
-                let cfString = unsafeBitCast(pathsPtr[i], to: CFString.self)
+                guard let raw = CFArrayGetValueAtIndex(cfPathsArray, i) else { continue }
+                let cfString = unsafeBitCast(raw, to: CFString.self)
                 watcher.handleRawEvent(path: cfString as String)
             }
         }
