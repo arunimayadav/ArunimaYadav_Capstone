@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+agent/last_plan.json
+inbox/
+macapp/.build/
+macapp/.swiftpm/
