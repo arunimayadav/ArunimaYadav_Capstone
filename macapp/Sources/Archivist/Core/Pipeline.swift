@@ -1,25 +1,24 @@
 import Foundation
 
 /// Orchestrates dedup -> extract -> understand -> embed -> graph write -> relate ->
-/// Finder-tag write -> confidence branch, for one file. Shared by the live watcher
-/// (Flow A) and the backfill command (Flow B) — plan.md section 5.
+/// rename -> Finder-tag write -> confidence branch, for one file freshly detected by
+/// the live watcher. By explicit product decision, this only ever runs for newly
+/// downloaded files — there is no backfill/bulk-index-existing-files path.
 final class Pipeline {
     let store: GraphStore
     let router: ProviderRouter
     let settings: SettingsStore
 
-    // Guards against the same path being processed twice concurrently. The AI call
-    // alone can take 1-3+ minutes with local Ollama (see OllamaProvider) — that's a
-    // wide window for a file to get re-saved (an export tool re-writing a WIP file,
-    // a browser finishing a partial download in stages, etc.) and trigger a second,
-    // overlapping run before the first has inserted its node. Without this, both
-    // runs pass the dedup check (nodeExists is false for both, since neither has
-    // inserted yet), both do a full duplicate AI call, and the loser's INSERT hits
-    // the nodes.content_hash UNIQUE constraint — GraphStore now recovers gracefully
-    // from that, but preventing the wasted duplicate call in the first place is
-    // better than merely surviving it.
-    private var inFlightPaths = Set<String>()
-    private let inFlightLock = NSLock()
+    // Explicit product requirement: only files downloaded *after* the app starts
+    // watching are ever processed — anything already sitting in Downloads must be
+    // ignored entirely, not just left un-renamed. FSEvents is created with "since
+    // now" semantics (see FileWatcher), which should already exclude pre-existing
+    // files on its own — but in practice, something (Spotlight reindexing, iCloud/
+    // sync software touching metadata, or another process writing to an old file)
+    // can still generate an event for a file that long predates the watcher. Rather
+    // than trust FSEvents' timing alone, this checks the file's actual creation date
+    // against when watching started, as a hard, independent guarantee.
+    private(set) var watchStartTime: Date?
 
     init(store: GraphStore, router: ProviderRouter, settings: SettingsStore) {
         self.store = store
@@ -27,20 +26,34 @@ final class Pipeline {
         self.settings = settings
     }
 
-    /// - Parameter isBackfill: backfill never moves/renames (plan.md Flow B) — this
-    ///   flag only affects logging/status semantics, since this MVP doesn't auto-move
-    ///   files at all outside of an explicit review/command action (section 8).
-    @discardableResult
-    func process(fileAt url: URL, isBackfill: Bool = false) async -> Node? {
-        let name = url.lastPathComponent
+    func markWatchStarted() {
+        watchStartTime = Date()
+        print("[Archivist][Pipeline] watch start time recorded: \(watchStartTime!) — " +
+              "files created before this are pre-existing and will be ignored")
+    }
 
-        guard beginProcessing(url.path) else {
-            print("[Archivist][Pipeline] \(name): already being processed (in flight) — skipping this trigger")
+    /// Callers must serialize invocations (see ProcessingQueue) — processing two
+    /// files concurrently would let a later file's `existingTags` snapshot miss an
+    /// earlier file's just-chosen tags, since the AI call alone can take minutes.
+    @discardableResult
+    func process(fileAt url: URL) async -> Node? {
+        let name = url.lastPathComponent
+        print("[Archivist][Pipeline] processing \(name)")
+
+        guard let watchStartTime else {
+            print("[Archivist][Pipeline] \(name): watcher hasn't recorded a start time — ignoring to be safe")
             return nil
         }
-        defer { endProcessing(url.path) }
-
-        print("[Archivist][Pipeline] processing \(name)")
+        guard let createdAt = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate else {
+            print("[Archivist][Pipeline] \(name): could not read creation date — ignoring to be safe " +
+                  "(only files created after the watcher started should ever be processed)")
+            return nil
+        }
+        guard createdAt >= watchStartTime else {
+            print("[Archivist][Pipeline] \(name): created \(createdAt), before watch start \(watchStartTime) " +
+                  "— pre-existing file, ignoring entirely")
+            return nil
+        }
 
         guard let hash = ContentHasher.hash(of: url) else {
             print("[Archivist][Pipeline] \(name): could not hash file (unreadable?) — stopping")
@@ -97,19 +110,11 @@ final class Pipeline {
             return node
         }
 
-        // Backfill indexes pre-existing files without ever renaming/moving them —
-        // plan.md Flow B, "a bulk, hard-to-reverse action shouldn't happen without an
-        // explicit, separate ask." The live watcher path (isBackfill == false) is the
-        // only one that renames.
         var finalNode = node
         var finalURL = url
-        if !isBackfill {
-            if let renamed = renameUsingSkill(node: node, understanding: understanding, at: url) {
-                finalURL = renamed.url
-                finalNode = renamed.node
-            }
-        } else {
-            print("[Archivist][Pipeline] \(name): backfill — indexing only, not renaming")
+        if let renamed = renameUsingSkill(node: node, understanding: understanding, at: url) {
+            finalURL = renamed.url
+            finalNode = renamed.node
         }
 
         if TagWriter.write(category: finalNode.category, tags: finalNode.tags, to: finalURL) {
@@ -155,36 +160,5 @@ final class Pipeline {
         guard let updated = store.node(id: node.id) else { return nil }
         print("[Archivist][Pipeline] \(name): renamed -> \(newName)")
         return (newURL, updated)
-    }
-
-    /// Returns false (caller should bail) if `path` is already being processed.
-    private func beginProcessing(_ path: String) -> Bool {
-        inFlightLock.lock()
-        defer { inFlightLock.unlock() }
-        guard !inFlightPaths.contains(path) else { return false }
-        inFlightPaths.insert(path)
-        return true
-    }
-
-    private func endProcessing(_ path: String) {
-        inFlightLock.lock()
-        defer { inFlightLock.unlock() }
-        inFlightPaths.remove(path)
-    }
-
-    /// Backfill (plan.md Flow B): index everything in `directory` not already
-    /// indexed, in place, no moves.
-    func backfill(directory: URL) async -> [Node] {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        var results: [Node] = []
-        for file in files {
-            if let node = await process(fileAt: file, isBackfill: true) {
-                results.append(node)
-            }
-        }
-        return results
     }
 }

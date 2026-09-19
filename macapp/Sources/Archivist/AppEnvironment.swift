@@ -9,6 +9,7 @@ final class AppEnvironment: ObservableObject {
     let router: ProviderRouter
     let pipeline: Pipeline
     let commandInterpreter: CommandInterpreter
+    private let processingQueue: ProcessingQueue
     private var watcher: FileWatcher?
 
     static let supportDirectory: URL = {
@@ -25,6 +26,7 @@ final class AppEnvironment: ObservableObject {
         self.router = ProviderRouter(settings: settings)
         self.pipeline = Pipeline(store: store, router: router, settings: settings)
         self.commandInterpreter = CommandInterpreter(router: router, store: store)
+        self.processingQueue = ProcessingQueue(pipeline: pipeline)
     }
 
     /// Starts the always-on Downloads (and optionally Desktop) watcher — plan.md
@@ -54,19 +56,11 @@ final class AppEnvironment: ObservableObject {
             }
         }
 
+        pipeline.markWatchStarted()
+
         watcher = FileWatcher(paths: paths) { [weak self] url in
-            print("[Archivist][AppEnvironment] watcher reported new file: \(url.path)")
-            Task {
-                print("[Archivist][AppEnvironment] pipeline.process starting for \(url.lastPathComponent)")
-                let node = await self?.pipeline.process(fileAt: url)
-                if let node {
-                    print("[Archivist][AppEnvironment] pipeline finished for \(url.lastPathComponent) -> " +
-                          "status=\(node.status.rawValue) category=\(node.category) confidence=\(node.confidence)")
-                } else {
-                    print("[Archivist][AppEnvironment] pipeline returned nil for \(url.lastPathComponent) " +
-                          "(duplicate, empty extraction, or unsupported file type — see Pipeline logs above)")
-                }
-            }
+            print("[Archivist][AppEnvironment] watcher reported new file: \(url.path) — enqueuing")
+            Task { await self?.processingQueue.enqueue(url) }
         }
         watcher?.start()
     }
