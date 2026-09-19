@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let environment = AppEnvironment()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        print("[Archivist][AppDelegate] applicationDidFinishLaunching")
         NSApp.setActivationPolicy(.accessory)
 
         let statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -16,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "archivebox", accessibilityDescription: "Archivist")
             button.action = #selector(togglePopover)
             button.target = self
+            print("[Archivist][AppDelegate] menu bar status item created")
+        } else {
+            print("[Archivist][AppDelegate] WARNING: statusBarItem.button was nil — no menu bar icon will show")
         }
         self.statusItem = statusBarItem
 
@@ -32,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.popover = popover
 
         environment.startWatching()
+        print("[Archivist][AppDelegate] launch sequence complete")
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -1,6 +1,13 @@
 import Foundation
 import SQLite3
 
+/// Tells sqlite3_bind_text/blob to copy the bytes immediately, rather than trust
+/// that our pointer stays valid for the life of the statement (passing `nil`, i.e.
+/// SQLITE_STATIC, is wrong here: Swift's String-to-C-string bridging only guarantees
+/// the pointer for the duration of the single call it's passed to, so SQLite would be
+/// left holding a dangling pointer and can read back garbage/empty data later).
+private let SQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 /// SQLite-backed graph memory: nodes, tags, node_tags, edges, moves.
 /// Kept as one local file per plan.md section 6/7 — no external graph database.
 final class GraphStore {
@@ -84,7 +91,7 @@ final class GraphStore {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             sqlite3_prepare_v2(db, "SELECT id FROM nodes WHERE content_hash = ?;", -1, &stmt, nil)
-            sqlite3_bind_text(stmt, 1, contentHash, -1, nil)
+            sqlite3_bind_text(stmt, 1, contentHash, -1, SQLiteTransient)
             return sqlite3_step(stmt) == SQLITE_ROW
         }
     }
@@ -104,19 +111,19 @@ final class GraphStore {
                     provider_used, extracted_text, embedding, content_hash, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, -1, &stmt, nil)
-            sqlite3_bind_text(stmt, 1, path, -1, nil)
-            sqlite3_bind_text(stmt, 2, filename, -1, nil)
-            sqlite3_bind_text(stmt, 3, understanding.category, -1, nil)
-            sqlite3_bind_text(stmt, 4, understanding.summary, -1, nil)
+            sqlite3_bind_text(stmt, 1, path, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 2, filename, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 3, understanding.category, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 4, understanding.summary, -1, SQLiteTransient)
             sqlite3_bind_double(stmt, 5, understanding.confidence)
-            sqlite3_bind_text(stmt, 6, status.rawValue, -1, nil)
-            sqlite3_bind_text(stmt, 7, providerUsed, -1, nil)
-            sqlite3_bind_text(stmt, 8, extractedText, -1, nil)
+            sqlite3_bind_text(stmt, 6, status.rawValue, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 7, providerUsed, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 8, extractedText, -1, SQLiteTransient)
             let embeddingData = embedding.withUnsafeBufferPointer { Data(buffer: $0) }
             _ = embeddingData.withUnsafeBytes { raw in
-                sqlite3_bind_blob(stmt, 9, raw.baseAddress, Int32(raw.count), nil)
+                sqlite3_bind_blob(stmt, 9, raw.baseAddress, Int32(raw.count), SQLiteTransient)
             }
-            sqlite3_bind_text(stmt, 10, contentHash, -1, nil)
+            sqlite3_bind_text(stmt, 10, contentHash, -1, SQLiteTransient)
             sqlite3_bind_double(stmt, 11, now)
             sqlite3_bind_double(stmt, 12, now)
             sqlite3_step(stmt)
@@ -134,14 +141,14 @@ final class GraphStore {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
         sqlite3_prepare_v2(db, "SELECT id FROM tags WHERE name = ?;", -1, &stmt, nil)
-        sqlite3_bind_text(stmt, 1, name, -1, nil)
+        sqlite3_bind_text(stmt, 1, name, -1, SQLiteTransient)
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_int64(stmt, 0)
         }
         sqlite3_finalize(stmt)
         stmt = nil
         sqlite3_prepare_v2(db, "INSERT INTO tags (name, created_at) VALUES (?, ?);", -1, &stmt, nil)
-        sqlite3_bind_text(stmt, 1, name, -1, nil)
+        sqlite3_bind_text(stmt, 1, name, -1, SQLiteTransient)
         sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
         sqlite3_step(stmt)
         return sqlite3_last_insert_rowid(db)
@@ -289,7 +296,7 @@ final class GraphStore {
             """, -1, &stmt, nil)
             sqlite3_bind_int64(stmt, 1, sourceId)
             sqlite3_bind_int64(stmt, 2, targetId)
-            sqlite3_bind_text(stmt, 3, type.rawValue, -1, nil)
+            sqlite3_bind_text(stmt, 3, type.rawValue, -1, SQLiteTransient)
             sqlite3_bind_double(stmt, 4, weight)
             sqlite3_bind_double(stmt, 5, Date().timeIntervalSince1970)
             sqlite3_step(stmt)
@@ -332,16 +339,16 @@ final class GraphStore {
                 VALUES (?, ?, ?, ?, ?, 0);
             """, -1, &stmt, nil)
             sqlite3_bind_int64(stmt, 1, nodeId)
-            sqlite3_bind_text(stmt, 2, srcPath, -1, nil)
-            sqlite3_bind_text(stmt, 3, dstPath, -1, nil)
+            sqlite3_bind_text(stmt, 2, srcPath, -1, SQLiteTransient)
+            sqlite3_bind_text(stmt, 3, dstPath, -1, SQLiteTransient)
             sqlite3_bind_double(stmt, 4, Date().timeIntervalSince1970)
-            sqlite3_bind_text(stmt, 5, triggeredBy, -1, nil)
+            sqlite3_bind_text(stmt, 5, triggeredBy, -1, SQLiteTransient)
             sqlite3_step(stmt)
 
             var update: OpaquePointer?
             defer { sqlite3_finalize(update) }
             sqlite3_prepare_v2(db, "UPDATE nodes SET path = ?, updated_at = ? WHERE id = ?;", -1, &update, nil)
-            sqlite3_bind_text(update, 1, dstPath, -1, nil)
+            sqlite3_bind_text(update, 1, dstPath, -1, SQLiteTransient)
             sqlite3_bind_double(update, 2, Date().timeIntervalSince1970)
             sqlite3_bind_int64(update, 3, nodeId)
             sqlite3_step(update)
